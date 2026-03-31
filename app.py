@@ -47,7 +47,7 @@ def read_pdf(file):
 
 # --- 4. Appens Gränssnitt (UI) ---
 st.title("🛒 Hemkunskapens Inköpshjälp")
-st.info("Ladda upp recept, ange antal elever och få en färdig inköpslista i KG/Liter.")
+st.info("Ladda upp recept, ange antal elever och få en färdig inköpslista i rätt måttenhter.")
 
 # Hämta API-nyckel säkert från Streamlit Secrets
 try:
