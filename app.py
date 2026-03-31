@@ -16,22 +16,20 @@ st.set_page_config(
 def create_pdf(text):
     pdf = FPDF()
     pdf.add_page()
-    # Vi använder Helvetica som är standard. 
-    # OBS: Denna font stödjer åäö via latin-1 kodning nedan.
+    # Vi använder Helvetica (standardfont)
     pdf.set_font("Helvetica", size=12)
     
     # Rensa bort Markdown (stjärnor)
     clean_text = text.replace("**", "")
     
-    # Rensa bort emojis och tecken som inte finns i latin-1 (för att undvika krasch)
-    # Vi behåller vanliga tecken, siffror och svenska åäö.
+    # Rensa bort emojis och tecken som inte finns i latin-1
     clean_text = re.sub(r'[^\x00-\x7F\x80-\xFF]', '', clean_text)
     
     # Skriv texten till PDF:en
-    # Vi använder pdf.epw (sidans bredd minus marginaler) för att undvika radbrytningsfel
     pdf.multi_cell(w=pdf.epw, h=10, txt=clean_text.encode('latin-1', 'replace').decode('latin-1'))
     
-    return pdf.output()
+    # FIX: Konvertera bytearray till bytes för att Streamlit ska acceptera formatet
+    return bytes(pdf.output())
 
 # --- 3. Funktioner för att läsa uppladdade filer ---
 def read_docx(file):
@@ -85,7 +83,7 @@ with tab1:
                 all_text_content += f"\n--- FIL: {file.name} ---\n" + read_pdf(file)
 
 with tab2:
-    pasted_text = st.text_area("Klistra in recepttext direkt (t.ex. från Google Docs):", height=250)
+    pasted_text = st.text_area("Klistra in recepttext direkt:", height=250)
     if pasted_text:
         all_text_content += "\n--- KLISTRAD TEXT ---\n" + pasted_text
 
@@ -94,9 +92,7 @@ if st.button("Skapa Inköpslista 🚀", use_container_width=True):
     if not all_text_content:
         st.warning("Du måste ladda upp eller klistra in minst ett recept först!")
     else:
-        # Konfigurera AI
         genai.configure(api_key=api_key)
-        # Vi använder den preview-modell du efterfrågade
         model = genai.GenerativeModel('gemini-3-flash-preview')
         
         with st.spinner('AI:n räknar ut mängder och enheter...'):
@@ -109,18 +105,14 @@ if st.button("Skapa Inköpslista 🚀", use_container_width=True):
             Det innebär att varje recept ska multipliceras med {stations}.
             
             Uppdrag:
-            1. Summera alla ingredienser från alla recept.
-            2. Omvandla alla volymmått (tsk, msk, dl) till vikt eller större enheter (kg, liter, styck) där det är rimligt för inköp.
-               Ex: Om det behövs 45 msk mjöl, skriv det som kg.
-            3. Sortera listan efter butiksavdelningar (t.ex. Mejeri, Skafferi, Grönsaksavdelning).
-            4. Var extremt noggrann med uträkningen.
-            
-            Svara endast med den färdiga inköpslistan i ett tydligt format.
+            1. Summera alla ingredienser.
+            2. Omvandla småmått till kg/liter/st för inköp.
+            3. Sortera efter butiksavdelning.
+            Svara endast med den färdiga listan.
             """
             
             try:
                 response = model.generate_content(prompt)
-                # Spara resultatet i session_state så det inte försvinner vid PDF-generering
                 st.session_state['result'] = response.text
             except Exception as e:
                 st.error(f"Ett fel uppstod vid kontakt med AI:n: {e}")
@@ -134,6 +126,7 @@ if 'result' in st.session_state:
     
     # Skapa PDF-filen
     try:
+        # Nu skickar create_pdf tillbaka rätt format (bytes)
         pdf_bytes = create_pdf(st.session_state['result'])
         
         st.download_button(
