@@ -3,28 +3,37 @@ import docx
 from pypdf import PdfReader
 from fpdf import FPDF
 import google.generativeai as genai
+import re
 
-# --- Inställningar ---
-st.set_page_config(page_title="Hemkunskapens Inköpshjälp", page_icon="🛒")
+# --- 1. Inställningar och Konfiguration ---
+st.set_page_config(
+    page_title="Hemkunskapens Inköpshjälp", 
+    page_icon="🛒",
+    layout="centered"
+)
 
-# --- Funktion för att skapa PDF ---
+# --- 2. Hjälpfunktioner för PDF-export ---
 def create_pdf(text):
     pdf = FPDF()
     pdf.add_page()
-    # Vi använder en standardfont som hanterar latin-1 (åäö)
+    # Vi använder Helvetica som är standard. 
+    # OBS: Denna font stödjer åäö via latin-1 kodning nedan.
     pdf.set_font("Helvetica", size=12)
     
-    # AI:ns svar kan innehålla stjärnor för fetstil (**), vi rensar dem för PDF:en
+    # Rensa bort Markdown (stjärnor)
     clean_text = text.replace("**", "")
     
-    # Dela upp texten i rader och skriv till PDF
-    for line in clean_text.split('\n'):
-        # encode('latin-1', 'replace') ser till att åäö fungerar i standard-PDF
-        pdf.multi_cell(0, 10, txt=line.encode('latin-1', 'replace').decode('latin-1'))
+    # Rensa bort emojis och tecken som inte finns i latin-1 (för att undvika krasch)
+    # Vi behåller vanliga tecken, siffror och svenska åäö.
+    clean_text = re.sub(r'[^\x00-\x7F\x80-\xFF]', '', clean_text)
+    
+    # Skriv texten till PDF:en
+    # Vi använder pdf.epw (sidans bredd minus marginaler) för att undvika radbrytningsfel
+    pdf.multi_cell(w=pdf.epw, h=10, txt=clean_text.encode('latin-1', 'replace').decode('latin-1'))
     
     return pdf.output()
 
-# --- Funktioner för att läsa filer ---
+# --- 3. Funktioner för att läsa uppladdade filer ---
 def read_docx(file):
     doc = docx.Document(file)
     return '\n'.join([para.text for para in doc.paragraphs])
@@ -33,77 +42,106 @@ def read_pdf(file):
     reader = PdfReader(file)
     text = ""
     for page in reader.pages:
-        text += page.extract_text()
+        content = page.extract_text()
+        if content:
+            text += content
     return text
 
-# --- Appens Gränssnitt ---
+# --- 4. Appens Gränssnitt (UI) ---
 st.title("🛒 Hemkunskapens Inköpshjälp")
+st.info("Ladda upp recept, ange antal elever och få en färdig inköpslista i KG/Liter.")
 
-api_key = st.secrets["GEMINI_API_KEY"]
+# Hämta API-nyckel säkert från Streamlit Secrets
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except:
+    st.error("Kunde inte hitta 'GEMINI_API_KEY' i dina Secrets.")
+    st.stop()
 
+# Inställningar för matlagningen
 col1, col2 = st.columns(2)
 with col1:
-    students = st.number_input("Antal elever:", min_value=1, value=20)
+    students = st.number_input("Totalt antal elever:", min_value=1, value=20)
 with col2:
-    group_size = st.number_input("Elever per grupp:", min_value=1, value=2)
+    group_size = st.number_input("Elever per grupp (station):", min_value=1, value=2)
 
 st.divider()
 
+# Inmatningsmetoder
 tab1, tab2 = st.tabs(["📁 Ladda upp filer", "📝 Klistra in text"])
 all_text_content = ""
 
 with tab1:
-    uploaded_files = st.file_uploader("Ladda upp recept (Word eller PDF)", type=['docx', 'pdf'], accept_multiple_files=True)
+    uploaded_files = st.file_uploader(
+        "Dra in recept (Word eller PDF)", 
+        type=['docx', 'pdf'], 
+        accept_multiple_files=True
+    )
     if uploaded_files:
         for file in uploaded_files:
             if file.name.endswith('.docx'):
-                all_text_content += f"\n--- {file.name} ---\n" + read_docx(file)
+                all_text_content += f"\n--- FIL: {file.name} ---\n" + read_docx(file)
             elif file.name.endswith('.pdf'):
-                all_text_content += f"\n--- {file.name} ---\n" + read_pdf(file)
+                all_text_content += f"\n--- FIL: {file.name} ---\n" + read_pdf(file)
 
 with tab2:
-    pasted_text = st.text_area("Klistra in recepttext här:", height=200)
+    pasted_text = st.text_area("Klistra in recepttext direkt (t.ex. från Google Docs):", height=250)
     if pasted_text:
-        all_text_content += "\n--- Klistrad text ---\n" + pasted_text
+        all_text_content += "\n--- KLISTRAD TEXT ---\n" + pasted_text
 
-# --- Beräkning ---
+# --- 5. Logik för beräkning ---
 if st.button("Skapa Inköpslista 🚀", use_container_width=True):
     if not all_text_content:
-        st.error("Hittade inget recept!")
+        st.warning("Du måste ladda upp eller klistra in minst ett recept först!")
     else:
+        # Konfigurera AI
         genai.configure(api_key=api_key)
+        # Vi använder den preview-modell du efterfrågade
         model = genai.GenerativeModel('gemini-3-flash-preview')
         
-        with st.spinner('Beräknar mängder...'):
-            portions = students / group_size
+        with st.spinner('AI:n räknar ut mängder och enheter...'):
+            stations = students / group_size
             prompt = f"""
-            Här är recept: {all_text_content}
-            Antal elever: {students}, Gruppstorlek: {group_size}.
-            Skapa en inköpslista med mängder i kg/liter/st. Gruppera efter butiksavdelning.
-            Var tydlig och strukturerad.
+            Roll: Expert på storkök och hemkunskap.
+            Data: {all_text_content}
+            
+            Kontext: Recepten ska lagas av {students} elever i grupper om {group_size}. 
+            Det innebär att varje recept ska multipliceras med {stations}.
+            
+            Uppdrag:
+            1. Summera alla ingredienser från alla recept.
+            2. Omvandla alla volymmått (tsk, msk, dl) till vikt eller större enheter (kg, liter, styck) där det är rimligt för inköp.
+               Ex: Om det behövs 45 msk mjöl, skriv det som kg.
+            3. Sortera listan efter butiksavdelningar (t.ex. Mejeri, Skafferi, Grönsaksavdelning).
+            4. Var extremt noggrann med uträkningen.
+            
+            Svara endast med den färdiga inköpslistan i ett tydligt format.
             """
+            
             try:
                 response = model.generate_content(prompt)
-                result_text = response.text
-                
-                # Spara resultatet i "session_state" så det finns kvar när man klickar på ladda ner
-                st.session_state['shopping_list'] = result_text
-                
+                # Spara resultatet i session_state så det inte försvinner vid PDF-generering
+                st.session_state['result'] = response.text
             except Exception as e:
-                st.error(f"Ett fel uppstod: {e}")
+                st.error(f"Ett fel uppstod vid kontakt med AI:n: {e}")
 
-# Visa resultat och ladda ner-knapp om listan finns
-if 'shopping_list' in st.session_state:
-    st.success("Inköpslistan är klar!")
-    st.markdown(st.session_state['shopping_list'])
+# --- 6. Visa Resultat och Export ---
+if 'result' in st.session_state:
+    st.success("Här är veckans sammanställda inköpslista:")
+    st.markdown(st.session_state['result'])
     
-    # Skapa PDF-filen i minnet
-    pdf_data = create_pdf(st.session_state['shopping_list'])
+    st.divider()
     
-    st.download_button(
-        label="📥 Ladda ner som PDF",
-        data=pdf_data,
-        file_name="inkopslista.pdf",
-        mime="application/pdf",
-        use_container_width=True
-    )
+    # Skapa PDF-filen
+    try:
+        pdf_bytes = create_pdf(st.session_state['result'])
+        
+        st.download_button(
+            label="📥 Ladda ner listan som PDF",
+            data=pdf_bytes,
+            file_name="inkopslista_hemkunskap.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+    except Exception as e:
+        st.error(f"Kunde inte skapa PDF-filen: {e}")
