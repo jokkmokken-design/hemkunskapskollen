@@ -72,7 +72,7 @@ if st.button("Skapa Inköpslista 🚀", use_container_width=True):
         st.error("Hittade inget recept!")
     else:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         with st.spinner('Beräknar mängder...'):
             portions = students / group_size
